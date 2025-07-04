@@ -2107,6 +2107,13 @@ void ImProcFunctions::ip_wavelet(LabImage * lab, LabImage * dst, int kall, const
         float strend = waparams.strend;
         float detend = (float) waparams.detend;
         float thrend = 0.01f * (float) waparams.thrend;
+/*
+        if(waparams.ushamethod == "sharp") {
+            if(detend >= 0.f) {
+           //     detend = - 10.f; 
+            }
+        } 
+*/        
         int ww = lab->W;
         int hh = lab->H;
         array2D<float> LL(ww, hh);

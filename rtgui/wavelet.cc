@@ -1484,10 +1484,17 @@ void Wavelet::read(const ProcParams* pp, const ParamsEdited* pedited)
 //    if (pp->wavelet.ushamethod == "none") {
 //        ushamethod->set_active(0);
 //   } else
+    guidFrame->show();
+   
     if (pp->wavelet.ushamethod == "sharp") {
         ushamethod->set_active(0);
+        guidFrame->hide();
+        softradend->setValue(0.);
+       
     } else if (pp->wavelet.ushamethod == "clari") {
         ushamethod->set_active(1);
+        guidFrame->show();
+
     }
 
     //CHSLmethod->set_active (1);
@@ -3212,6 +3219,8 @@ void Wavelet::ushamethodChanged()
         Dirmethod->set_active(3);
         CLmethod->set_sensitive(false);
         Backmethod->set_sensitive(false);
+        guidFrame->show();
+
     } else if (ushamethod->get_active_row_number() == 0 && expclari->getEnabled() == true) {
         Backmethod->set_active(0);
         CLmethod->set_active(1);
@@ -3221,6 +3230,9 @@ void Wavelet::ushamethodChanged()
         Dirmethod->set_sensitive(true);
         CLmethod->set_sensitive(false);
         Backmethod->set_sensitive(false);
+        guidFrame->hide();
+        softradend->setValue(0.);
+
         /*  }  else if (ushamethod->get_active_row_number() == 0 || expclari->getEnabled() == false) {
               Backmethod->set_active(1);
               CLmethod->set_active(3);
@@ -3238,6 +3250,8 @@ void Wavelet::ushamethodChanged()
         Dirmethod->set_sensitive(false);
         CLmethod->set_sensitive(true);
         Backmethod->set_sensitive(true);
+        guidFrame->show();
+
     }
 
     if (listener && (multiImage || getEnabled())) {
