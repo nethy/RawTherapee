@@ -1807,10 +1807,9 @@ public:
 class PerceptualToneCurveState
 {
 public:
-    float Working2Prophoto[3][3];
-    float Prophoto2Working[3][3];
-    float cmul_contrast;
-    bool isProphoto;
+    float yr;
+    float yg;
+    float yb;
 };
 
 // Tone curve whose purpose is to keep the color appearance constant, that is the curve changes contrast

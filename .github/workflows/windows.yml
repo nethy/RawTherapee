@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build_type: [release, debug]
+        build_type: [release]
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -88,14 +88,14 @@ jobs:
           echo "Running CMake install."
           cmake --build build --target install
 
-      - name: Include Lensfun
-        run: |
-          echo "Updating Lensfun database."
-          lensfun-update-data
-          echo "Creating Lensfun directory in the build directory."
-          mkdir -p 'build/${{matrix.build_type}}/share'
-          echo "Copying Lensfun database to the build directory."
-          cp -R "/C/msys2/msys64/mingw64/var/lib/lensfun-updates/version_1" 'build/${{matrix.build_type}}/share/lensfun'
+      # - name: Include Lensfun
+      #   run: |
+      #     echo "Updating Lensfun database."
+      #     lensfun-update-data
+      #     echo "Creating Lensfun directory in the build directory."
+      #     mkdir -p 'build/${{matrix.build_type}}/share'
+      #     echo "Copying Lensfun database to the build directory."
+      #     cp -R "/C/msys2/msys64/mingw64/var/lib/lensfun-updates/version_1" 'build/${{matrix.build_type}}/share/lensfun'
 
       - name: Bundle dependencies
         run: |
