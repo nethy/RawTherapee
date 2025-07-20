@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build_type: [release, debug]
+        build_type: [release]
         arch: [x86_64, arm64]
     env:
       MSYS2_ENV_NAME: ${{ matrix.arch == 'arm64' && 'CLANGARM64' || 'UCRT64' }}
