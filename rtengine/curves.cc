@@ -3376,310 +3376,60 @@ float PerceptualToneCurve::calculateToneCurveContrastValue() const
 
 void PerceptualToneCurve::BatchApply(const size_t start, const size_t end, float *rc, float *gc, float *bc, const PerceptualToneCurveState &state) const
 {
-    const AdobeToneCurve& adobeTC = static_cast<const AdobeToneCurve&>((const ToneCurve&) * this);
+    assert(lutToneCurve);
+
+    const AdobeToneCurve &adobeTC = static_cast<const AdobeToneCurve &>((const ToneCurve &)*this);
 
     for (size_t i = start; i < end; ++i) {
-        const bool oog_r = OOG(rc[i]);
-        const bool oog_g = OOG(gc[i]);
-        const bool oog_b = OOG(bc[i]);
-
-        if (oog_r && oog_g && oog_b) {
-            continue;
-        }
-
         float r = CLIP(rc[i]);
         float g = CLIP(gc[i]);
         float b = CLIP(bc[i]);
-
-        if (!state.isProphoto) {
-            // convert to prophoto space to make sure the same result is had regardless of working color space
-            float newr = state.Working2Prophoto[0][0] * r + state.Working2Prophoto[0][1] * g + state.Working2Prophoto[0][2] * b;
-            float newg = state.Working2Prophoto[1][0] * r + state.Working2Prophoto[1][1] * g + state.Working2Prophoto[1][2] * b;
-            float newb = state.Working2Prophoto[2][0] * r + state.Working2Prophoto[2][1] * g + state.Working2Prophoto[2][2] * b;
-            r = newr;
-            g = newg;
-            b = newb;
-        }
 
         float ar = r;
         float ag = g;
         float ab = b;
         adobeTC.Apply(ar, ag, ab);
 
-        if (ar >= 65535.f && ag >= 65535.f && ab >= 65535.f) {
-            // clip fast path, will also avoid strange colours of clipped highlights
-            //rc[i] = gc[i] = bc[i] = 65535.f;
-            if (!oog_r) {
-                rc[i] = 65535.f;
-            }
+        // panchromatic lunimance coefficients
+        constexpr float Yr = 0.3333333f;
+        constexpr float Yg = 0.3333333f;
+        constexpr float Yb = 0.3333333f;
 
-            if (!oog_g) {
-                gc[i] = 65535.f;
-            }
+        // original color luminance
+        const float lr = CurveFactory::igamma2(r / 65535.f);
+        const float lg = CurveFactory::igamma2(g / 65535.f);
+        const float lb = CurveFactory::igamma2(b / 65535.f);
+        float currentLuminance = CurveFactory::gamma2(lr * Yr + lg * Yg + lb * Yb) * 65535.f;
+        currentLuminance = currentLuminance == 0.f ? 0.00001f : currentLuminance;
 
-            if (!oog_b) {
-                bc[i] = 65535.f;
-            }
+        const float targetLuminance = lutToneCurve[currentLuminance];
 
-            continue;
-        }
+        // color luminance of film-like tone curve
+        const float lar = CurveFactory::igamma2(ar / 65535.f);
+        const float lag = CurveFactory::igamma2(ag / 65535.f);
+        const float lab = CurveFactory::igamma2(ab / 65535.f);
+        float adobeLuminance = CurveFactory::gamma2(lar * Yr + lag * Yg + lab * Yb) * 65535.f;
+        adobeLuminance = adobeLuminance == 0.f ? 0.00001f : adobeLuminance;
 
-        if (ar <= 0.f && ag <= 0.f && ab <= 0.f) {
-            //rc[i] = gc[i] = bc[i] = 0;
-            if (!oog_r) {
-                rc[i] = 0.f;
-            }
+        // adjust adobe tone curve luminance to match target luminance
+        const float Acoef = targetLuminance / adobeLuminance;
+        ar = CLIP<float>(ar * Acoef);
+        ag = CLIP<float>(ag * Acoef);
+        ab = CLIP<float>(ab * Acoef);
 
-            if (!oog_g) {
-                gc[i] = 0.f;
-            }
+        // luminance tone curve
+        const float Lcoef = targetLuminance / currentLuminance;
+        r = CLIP<float>(r * Lcoef);
+        g = CLIP<float>(g * Lcoef);
+        b = CLIP<float>(b * Lcoef);
 
-            if (!oog_b) {
-                bc[i] = 0.f;
-            }
+        // interpolate the two tone curves
+        const float weight = 0.5f;
+        r = CLIP<float>(intp(weight, ar, r));
+        g = CLIP<float>(intp(weight, ag, g));
+        b = CLIP<float>(intp(weight, ab, b));
 
-            continue;
-        }
-
-        // ProPhoto constants for luminance, that is xyz_prophoto[1][]
-        constexpr float Yr = 0.2880402f;
-        constexpr float Yg = 0.7118741f;
-        constexpr float Yb = 0.0000857f;
-
-        // we use the Adobe (RGB-HSV hue-stabilized) curve to decide luminance, which generally leads to a less contrasty result
-        // compared to a pure luminance curve. We do this to be more compatible with the most popular curves.
-        const float oldLuminance = r * Yr + g * Yg + b * Yb;
-        const float newLuminance = ar * Yr + ag * Yg + ab * Yb;
-        const float Lcoef = newLuminance / oldLuminance;
-        r = LIM<float>(r * Lcoef, 0.f, 65535.f);
-        g = LIM<float>(g * Lcoef, 0.f, 65535.f);
-        b = LIM<float>(b * Lcoef, 0.f, 65535.f);
-
-        // move to JCh so we can modulate chroma based on the global contrast-related chroma scaling factor
-        float x, y, z;
-        Color::Prophotoxyz(r, g, b, x, y, z);
-
-        float J, C, h;
-        int c16 = 1;//always Cat02....to reserve compatibility
-        float plum = 100.f;
-        Ciecam02::xyz2jch_ciecam02float(J, C, h,
-                                        aw, fl,
-                                        x * 0.0015259022f,  y * 0.0015259022f,  z * 0.0015259022f,
-                                        xw, yw,  zw,
-                                        c,  nc, pow1, nbb, ncb, cz, d, c16, plum);
-
-
-        if (!isfinite(J) || !isfinite(C) || !isfinite(h)) {
-            // this can happen for dark noise colours or colours outside human gamut. Then we just return the curve's result.
-            if (!state.isProphoto) {
-                float newr = state.Prophoto2Working[0][0] * r + state.Prophoto2Working[0][1] * g + state.Prophoto2Working[0][2] * b;
-                float newg = state.Prophoto2Working[1][0] * r + state.Prophoto2Working[1][1] * g + state.Prophoto2Working[1][2] * b;
-                float newb = state.Prophoto2Working[2][0] * r + state.Prophoto2Working[2][1] * g + state.Prophoto2Working[2][2] * b;
-                r = newr;
-                g = newg;
-                b = newb;
-            }
-
-            if (!oog_r) {
-                rc[i] = r;
-            }
-
-            if (!oog_g) {
-                gc[i] = g;
-            }
-
-            if (!oog_b) {
-                bc[i] = b;
-            }
-
-            continue;
-        }
-
-        float cmul = state.cmul_contrast; // chroma scaling factor
-
-        // depending on color, the chroma scaling factor can be fine-tuned below
-
-        {
-            // decrease chroma scaling slightly of extremely saturated colors
-            float saturated_scale_factor = 0.95f;
-            constexpr float lolim = 35.f; // lower limit, below this chroma all colors will keep original chroma scaling factor
-            constexpr float hilim = 60.f; // high limit, above this chroma the chroma scaling factor is multiplied with the saturated scale factor value above
-
-            if (C < lolim) {
-                // chroma is low enough, don't scale
-                saturated_scale_factor = 1.f;
-            } else if (C < hilim) {
-                // S-curve transition between low and high limit
-                float cx = (C - lolim) / (hilim - lolim); // x = [0..1], 0 at lolim, 1 at hilim
-
-                if (cx < 0.5f) {
-                    cx = 2.f * SQR(cx);
-                } else {
-                    cx = 1.f - 2.f * SQR(1.f - cx);
-                }
-
-                saturated_scale_factor = (1.f - cx) + saturated_scale_factor * cx;
-            } else {
-                // do nothing, high saturation color, keep scale factor
-            }
-
-            cmul *= saturated_scale_factor;
-        }
-
-        {
-            // increase chroma scaling slightly of shadows
-            float nL = Color::gamma2curve[newLuminance]; // apply gamma so we make comparison and transition with a more perceptual lightness scale
-            float dark_scale_factor = 1.20f;
-            //float dark_scale_factor = 1.0 + state.debug.p2 / 100.0f;
-            constexpr float lolim = 0.15f;
-            constexpr float hilim = 0.50f;
-
-            if (nL < lolim) {
-                // do nothing, keep scale factor
-            } else if (nL < hilim) {
-                // S-curve transition
-                float cx = (nL - lolim) / (hilim - lolim); // x = [0..1], 0 at lolim, 1 at hilim
-
-                if (cx < 0.5f) {
-                    cx = 2.f * SQR(cx);
-                } else {
-                    cx = 1.f - 2.f * SQR(1 - cx);
-                }
-
-                dark_scale_factor = dark_scale_factor * (1.0f - cx) + cx;
-            } else {
-                dark_scale_factor = 1.f;
-            }
-
-            cmul *= dark_scale_factor;
-        }
-
-        {
-            // to avoid strange CIECAM02 chroma errors on close-to-shadow-clipping colors we reduce chroma scaling towards 1.0 for black colors
-            float dark_scale_factor = 1.f / cmul;
-            constexpr float lolim = 4.f;
-            constexpr float hilim = 7.f;
-
-            if (J < lolim) {
-                // do nothing, keep scale factor
-            } else if (J < hilim) {
-                // S-curve transition
-                float cx = (J - lolim) / (hilim - lolim);
-
-                if (cx < 0.5f) {
-                    cx = 2.f * SQR(cx);
-                } else {
-                    cx = 1.f - 2.f * SQR(1 - cx);
-                }
-
-                dark_scale_factor = dark_scale_factor * (1.f - cx) + cx;
-            } else {
-                dark_scale_factor = 1.f;
-            }
-
-            cmul *= dark_scale_factor;
-        }
-
-        C *= cmul;
-        Ciecam02::jch2xyz_ciecam02float(x, y, z,
-                                        J, C, h,
-                                        xw, yw,  zw,
-                                        c, nc, pow1, nbb, ncb, fl, cz, d, aw, c16, plum);
-
-        if (!isfinite(x) || !isfinite(y) || !isfinite(z)) {
-            // can happen for colours on the rim of being outside gamut, that worked without chroma scaling but not with. Then we return only the curve's result.
-            if (!state.isProphoto) {
-                float newr = state.Prophoto2Working[0][0] * r + state.Prophoto2Working[0][1] * g + state.Prophoto2Working[0][2] * b;
-                float newg = state.Prophoto2Working[1][0] * r + state.Prophoto2Working[1][1] * g + state.Prophoto2Working[1][2] * b;
-                float newb = state.Prophoto2Working[2][0] * r + state.Prophoto2Working[2][1] * g + state.Prophoto2Working[2][2] * b;
-                r = newr;
-                g = newg;
-                b = newb;
-            }
-
-            if (!oog_r) {
-                rc[i] = r;
-            }
-
-            if (!oog_g) {
-                gc[i] = g;
-            }
-
-            if (!oog_b) {
-                bc[i] = b;
-            }
-
-            continue;
-        }
-
-        Color::xyz2Prophoto(x, y, z, r, g, b);
-        r *= 655.35f;
-        g *= 655.35f;
-        b *= 655.35f;
-        r = LIM<float>(r, 0.f, 65535.f);
-        g = LIM<float>(g, 0.f, 65535.f);
-        b = LIM<float>(b, 0.f, 65535.f);
-
-        {
-            // limit saturation increase in rgb space to avoid severe clipping and flattening in extreme highlights
-
-            // we use the RGB-HSV hue-stable "Adobe" curve as reference. For S-curve contrast it increases
-            // saturation greatly, but desaturates extreme highlights and thus provide a smooth transition to
-            // the white point. However the desaturation effect is quite strong so we make a weighting
-            const float as = Color::rgb2s(ar, ag, ab);
-            const float s = Color::rgb2s(r, g, b);
-
-            const float sat_scale = as <= 0.f ? 1.f : s / as; // saturation scale compared to Adobe curve
-            float keep = 0.2f;
-            constexpr float lolim = 1.00f; // only mix in the Adobe curve if we have increased saturation compared to it
-            constexpr float hilim = 1.20f;
-
-            if (sat_scale < lolim) {
-                // saturation is low enough, don't desaturate
-                keep = 1.f;
-            } else if (sat_scale < hilim) {
-                // S-curve transition
-                float cx = (sat_scale - lolim) / (hilim - lolim); // x = [0..1], 0 at lolim, 1 at hilim
-
-                if (cx < 0.5f) {
-                    cx = 2.f * SQR(cx);
-                } else {
-                    cx = 1.f - 2.f * SQR(1 - cx);
-                }
-
-                keep = (1.f - cx) + keep * cx;
-            } else {
-                // do nothing, very high increase, keep minimum amount
-            }
-
-            if (keep < 1.f) {
-                // mix in some of the Adobe curve result
-                r = intp(keep, r, ar);
-                g = intp(keep, g, ag);
-                b = intp(keep, b, ab);
-            }
-        }
-
-        if (!state.isProphoto) {
-            float newr = state.Prophoto2Working[0][0] * r + state.Prophoto2Working[0][1] * g + state.Prophoto2Working[0][2] * b;
-            float newg = state.Prophoto2Working[1][0] * r + state.Prophoto2Working[1][1] * g + state.Prophoto2Working[1][2] * b;
-            float newb = state.Prophoto2Working[2][0] * r + state.Prophoto2Working[2][1] * g + state.Prophoto2Working[2][2] * b;
-            r = newr;
-            g = newg;
-            b = newb;
-        }
-
-        if (!oog_r) {
-            rc[i] = r;
-        }
-
-        if (!oog_g) {
-            gc[i] = g;
-        }
-
-        if (!oog_b) {
-            bc[i] = b;
-        }
+        setUnlessOOG(rc[i], gc[i], bc[i], r, g, b);
     }
 }
 float PerceptualToneCurve::cf_range[2];
