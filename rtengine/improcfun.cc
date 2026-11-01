@@ -2600,6 +2600,86 @@ void ImProcFunctions::rgbProc(Imagefloat* working, LabImage* lab, PipetteBuffer 
                     customToneCurve(customToneCurve2, curveMode2, rtemp, gtemp, btemp, istart, tH, jstart, tW, TS, ptc2ApplyState);
                 }
 
+                if (editID == EUID_HSV_H || editID == EUID_HSV_S || editID == EUID_HSV_V) {
+                    for (int i = istart, ti = 0; i < tH; i++, ti++) {
+                        for (int j = jstart, tj = 0; j < tW; j++, tj++) {
+                            float h, s, v;
+                            Color::rgb2hsv(rtemp[ti * TS + tj], gtemp[ti * TS + tj], btemp[ti * TS + tj], h, s, v);
+                            editWhateverTmp[ti * TS + tj] = h;
+                        }
+                    }
+                }
+
+                if (sat != 0 || hCurveEnabled || sCurveEnabled || vCurveEnabled) {
+                    const float satby100 = sat / 100.f;
+
+                    for (int i = istart, ti = 0; i < tH; i++, ti++) {
+                        for (int j = jstart, tj = 0; j < tW; j++, tj++) {
+                            float h, s, v;
+                            Color::rgb2hsvtc(rtemp[ti * TS + tj], gtemp[ti * TS + tj], btemp[ti * TS + tj], h, s, v);
+                            h /= 6.f;
+
+                            if (sat > 0) {
+                                s = std::max(0.f, intp(satby100, 1.f - SQR(SQR(1.f - std::min(s, 1.0f))), s));
+                            } else { /*if (sat < 0)*/
+                                s *= 1.f + satby100;
+                            }
+
+                            //HSV equalizer
+                            if (hCurveEnabled) {
+                                h = (hCurve->getVal(h) - 0.5) * 2.0 + static_cast<double>(h);
+
+                                if (h > 1.0f) {
+                                    h -= 1.0f;
+                                } else if (h < 0.0f) {
+                                    h += 1.0f;
+                                }
+                            }
+
+                            if (sCurveEnabled) {
+                                //shift saturation
+                                float satparam = (sCurve->getVal(double (h)) - 0.5) * 2;
+
+                                if (satparam > 0.00001f) {
+                                    s = (1.f - satparam) * s + satparam * (1.f - SQR(1.f - min(s, 1.0f)));
+
+                                    if (s < 0.f) {
+                                        s = 0.f;
+                                    }
+                                } else if (satparam < -0.00001f) {
+                                    s *= 1.f + satparam;
+                                }
+
+                            }
+
+                            if (vCurveEnabled) {
+                                if (v < 0) {
+                                    v = 0;    // important
+                                }
+
+                                //shift value
+                                float valparam = vCurve->getVal(h) - 0.5;
+                                valparam *= (1.f - SQR(SQR(1.f - min(s, 1.0f))));
+
+                                if (valparam > 0.00001f) {
+                                    v = (1.f - valparam) * v + valparam * (1.f - SQR(1.f - min(v, 1.0f)));   // SQR (SQR  to increase action and avoid artifacts
+
+                                    if (v < 0) {
+                                        v = 0;
+                                    }
+                                } else {
+                                    if (valparam < -0.00001f) {
+                                        v *= (1.f + valparam);    //1.99 to increase action
+                                    }
+                                }
+
+                            }
+
+                            Color::hsv2rgbdcp(h * 6.f, s, v, rtemp[ti * TS + tj], gtemp[ti * TS + tj], btemp[ti * TS + tj]);
+                        }
+                    }
+                }
+
                 if (editID == EUID_RGB_R) {
                     for (int i = istart, ti = 0; i < tH; i++, ti++) {
                         for (int j = jstart, tj = 0; j < tW; j++, tj++) {
@@ -2712,86 +2792,6 @@ void ImProcFunctions::rgbProc(Imagefloat* working, LabImage* lab, PipetteBuffer 
 
                                 setUnlessOOG(rtemp[ti * TS + tj], gtemp[ti * TS + tj], btemp[ti * TS + tj], r, g, b);
                             }
-                        }
-                    }
-                }
-
-                if (editID == EUID_HSV_H || editID == EUID_HSV_S || editID == EUID_HSV_V) {
-                    for (int i = istart, ti = 0; i < tH; i++, ti++) {
-                        for (int j = jstart, tj = 0; j < tW; j++, tj++) {
-                            float h, s, v;
-                            Color::rgb2hsv(rtemp[ti * TS + tj], gtemp[ti * TS + tj], btemp[ti * TS + tj], h, s, v);
-                            editWhateverTmp[ti * TS + tj] = h;
-                        }
-                    }
-                }
-
-                if (sat != 0 || hCurveEnabled || sCurveEnabled || vCurveEnabled) {
-                    const float satby100 = sat / 100.f;
-
-                    for (int i = istart, ti = 0; i < tH; i++, ti++) {
-                        for (int j = jstart, tj = 0; j < tW; j++, tj++) {
-                            float h, s, v;
-                            Color::rgb2hsvtc(rtemp[ti * TS + tj], gtemp[ti * TS + tj], btemp[ti * TS + tj], h, s, v);
-                            h /= 6.f;
-
-                            if (sat > 0) {
-                                s = std::max(0.f, intp(satby100, 1.f - SQR(SQR(1.f - std::min(s, 1.0f))), s));
-                            } else { /*if (sat < 0)*/
-                                s *= 1.f + satby100;
-                            }
-
-                            //HSV equalizer
-                            if (hCurveEnabled) {
-                                h = (hCurve->getVal(h) - 0.5) * 2.0 + static_cast<double>(h);
-
-                                if (h > 1.0f) {
-                                    h -= 1.0f;
-                                } else if (h < 0.0f) {
-                                    h += 1.0f;
-                                }
-                            }
-
-                            if (sCurveEnabled) {
-                                //shift saturation
-                                float satparam = (sCurve->getVal(double (h)) - 0.5) * 2;
-
-                                if (satparam > 0.00001f) {
-                                    s = (1.f - satparam) * s + satparam * (1.f - SQR(1.f - min(s, 1.0f)));
-
-                                    if (s < 0.f) {
-                                        s = 0.f;
-                                    }
-                                } else if (satparam < -0.00001f) {
-                                    s *= 1.f + satparam;
-                                }
-
-                            }
-
-                            if (vCurveEnabled) {
-                                if (v < 0) {
-                                    v = 0;    // important
-                                }
-
-                                //shift value
-                                float valparam = vCurve->getVal(h) - 0.5;
-                                valparam *= (1.f - SQR(SQR(1.f - min(s, 1.0f))));
-
-                                if (valparam > 0.00001f) {
-                                    v = (1.f - valparam) * v + valparam * (1.f - SQR(1.f - min(v, 1.0f)));   // SQR (SQR  to increase action and avoid artifacts
-
-                                    if (v < 0) {
-                                        v = 0;
-                                    }
-                                } else {
-                                    if (valparam < -0.00001f) {
-                                        v *= (1.f + valparam);    //1.99 to increase action
-                                    }
-                                }
-
-                            }
-
-                            Color::hsv2rgbdcp(h * 6.f, s, v, rtemp[ti * TS + tj], gtemp[ti * TS + tj], btemp[ti * TS + tj]);
                         }
                     }
                 }

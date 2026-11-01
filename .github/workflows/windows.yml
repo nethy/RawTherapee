@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         build_type: [release]
-        arch: [x86_64, arm64]
+        arch: [x86_64]
     env:
       MSYS2_ENV_NAME: ${{ matrix.arch == 'arm64' && 'CLANGARM64' || 'UCRT64' }}
       MSYS2_ENV_PREFIX: ${{ matrix.arch == 'arm64' && 'clangarm64' || 'ucrt64' }}
@@ -238,8 +238,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build_type: [release, debug]
-        arch: [x86_64, arm64]
+        build_type: [release]
+        arch: [x86_64]
     env:
       ARTIFACT_NAME: ${{ format('{0}_{1}_{2}', needs.build.outputs.ARTIFACT_NAME_PREFIX, matrix.arch, matrix.build_type) }}
       REF_NAME_FILTERED: ${{needs.build.outputs.REF_NAME_FILTERED}}
@@ -363,8 +363,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build_type: [release, debug]
-        arch: [x86_64, arm64]
+        build_type: [release]
+        arch: [x86_64]
     env:
       ARTIFACT_NAME: ${{ format('{0}_{1}_{2}', needs.build.outputs.ARTIFACT_NAME_PREFIX, matrix.arch, matrix.build_type) }}
     steps:
