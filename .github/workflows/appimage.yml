@@ -1,18 +1,4 @@
 name: AppImage Build
-on:
-  push:
-    branches:
-      - dev
-      - releases
-      - 'release-[0-9]+.*'
-    tags:
-      - '[0-9]+.*'
-  pull_request:
-    branches:
-      - dev
-      - releases
-      - 'release-[0-9]+.*'
-  workflow_dispatch:
 
 env:
   publish_pre_dev_labels: '[]'
@@ -299,7 +285,7 @@ jobs:
 
           echo "Building and installing."
           sudo make -j$(nproc) install
-          
+
       - name: Install libjxl
         working-directory: .
         run: |
