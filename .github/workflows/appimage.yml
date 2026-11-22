@@ -299,7 +299,7 @@ jobs:
 
           echo "Building and installing."
           sudo make -j$(nproc) install
-          
+
       - name: Install libjxl
         working-directory: .
         run: |

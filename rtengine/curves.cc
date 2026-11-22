@@ -3407,48 +3407,138 @@ float PerceptualToneCurve::calculateToneCurveContrastValue() const
     return maxslope;
 }
 
+/*
+Rational/Reinhard rollof; values compressed after the knee to the threshold.
+*/
+inline float compress(const float x, const float knee, const float threshold)
+{
+    assert(threshold > knee);
+
+    if (x <= knee) {
+        return x;
+    } else {
+        const float t_dist = x - knee;
+        return knee + t_dist / (1.f + t_dist / (threshold - knee));
+    }
+}
+
+inline float getLuminance(const float r, const float g, const float b, const PerceptualToneCurveState &state)
+{
+    return state.y[0] * r + state.y[1] * g + state.y[2] * b;
+}
+
+inline float getColorfulness(const float r, const float g, const float b, const float y)
+{
+    const float cr = (r - y) / 65535.f;
+    const float cg = (g - y) / 65535.f;
+    const float cb = (b - y) / 65535.f;
+    return std::sqrt(cr * cr + cg * cg + cb * cb);
+}
+
 void PerceptualToneCurve::BatchApply(const size_t start, const size_t end, float *rc, float *gc, float *bc, const PerceptualToneCurveState &state) const
 {
     assert(lutToneCurve);
+
+    constexpr float eps = 1e-5f;
+    constexpr float maxValue = 65535.f;
 
     for (size_t i = start; i < end; ++i) {
         float r = CLIP(rc[i]);
         float g = CLIP(gc[i]);
         float b = CLIP(bc[i]);
 
-        const float currentLum = state.yr * r + state.yg * g + state.yb * b;
-        const float targetLum = lutToneCurve[currentLum];
-
-        constexpr float diff = 4.f;
-        const float low = max(currentLum - diff, 0.f);
-        const float high = min(currentLum + diff, 65535.f);
-        const float slope = abs(lutToneCurve[high] - lutToneCurve[low]) / (high - low);
-
-        const float luminanceScale = targetLum / (currentLum == 0.f ? 1e-5f : currentLum);
-        float k = sqrt(slope * luminanceScale);
-
-        r = targetLum + k * (r - currentLum);
-        g = targetLum + k * (g - currentLum);
-        b = targetLum + k * (b - currentLum);
-
-        const float maximum = max(max(r, g), b);
-        float max_k = 1.f;
-        if (maximum > 65535.f) {
-            max_k = (65535.f - targetLum) / (maximum - targetLum);
-        }
-        const float minimum = min(min(r, g), b);
-        float min_k = 1.f;
-        if (minimum < 0.f) {
-            min_k = targetLum / (targetLum - minimum);
-        }
-        k = min(max_k, min_k);
-        if (k < 1.f) {
-            r = targetLum + k * (r - targetLum);
-            g = targetLum + k * (g - targetLum);
-            b = targetLum + k * (b - targetLum);
+        const float y_in = getLuminance(r, g, b, state);
+        if (y_in < eps) {
+            const float black = LIM<float>(lutToneCurve[0.f], 0.f, maxValue);
+            setUnlessOOG(rc[i], gc[i], bc[i], black, black, black);
+            continue;
         }
 
-        setUnlessOOG(rc[i], gc[i], bc[i], CLIP<float>(r), CLIP<float>(g), CLIP<float>(b));
+        // constexpr float diff = 4.f;
+        // const float low = max(y_in - diff, 0.f);
+        // const float high = min(y_in + diff, 65535.f);
+        // const float slope = abs(lutToneCurve[high] - lutToneCurve[low]) / (high - low);
+
+        const float r_film = lutToneCurve[r];
+        const float g_film = lutToneCurve[g];
+        const float b_film = lutToneCurve[b];
+        const float y_film = getLuminance(r_film, g_film, b_film, state);
+
+        // const float y_out = lutToneCurve[y_in];
+        const float y_out = y_film;
+        const float k_y = compress(y_out / y_in, 4.f, 6.f);
+
+        const float c_in = getColorfulness(r, g, b, y_in);
+        const float c_film = getColorfulness(r_film, g_film, b_film, y_film);
+        // const float k_film = c_in < eps ? 0.f : c_film / c_in;
+        constexpr float eps2 = eps * eps;
+        const float k_film = (c_film * c_in + eps2 * k_y) / (c_in * c_in + eps2);
+
+        // Separate control over midtone chroma boost vs. analogue highlight roll-off
+        constexpr float w_midtone = 0.65f;     // 0.0 = k_y, 1.0 = k_film
+        constexpr float w_highlight = 0.35f;   // 0.0 = k_y, 1.0 = k_film
+
+        const float blend = (k_film > k_y) ? w_midtone : w_highlight;
+        float k = k_y + blend * (k_film - k_y);
+
+        r = y_out + k * (r - y_in);
+        g = y_out + k * (g - y_in);
+        b = y_out + k * (b - y_in);
+
+        // const float maximum = std::max({r, g, b});
+        // float max_k = 1.f;
+        // if (maximum > maxValue) {
+        //     max_k = (maxValue - y_out) / (maximum - y_out);
+        // }
+        // const float minimum = std::min({r, g, b});
+        // float min_k = 1.f;
+        // if (minimum < 0.f) {
+        //     min_k = y_out / (y_out - minimum);
+        // }
+        // k = std::min(max_k, min_k);
+        // if (k < 1.f) {
+        //     r = y_out + k * (r - y_out);
+        //     g = y_out + k * (g - y_out);
+        //     b = y_out + k * (b - y_out);
+        // }
+
+        // 1. Luminance-adaptive anchor (#3): gently lowers target luminance in bright highlights
+        //    so saturated colors roll off into rich tones instead of clipping to white.
+        constexpr float highlight_pull = 0.15f; // 0.0 = constant luminance, 0.15-0.25 = richer highlights
+        const float y_norm = y_out / maxValue;
+        const float y_anchor = y_out * (1.f - highlight_pull * y_norm * y_norm);
+
+        // 2. Project working RGB (e.g., Rec.2020 D50) to target RGB (e.g., sRGB D50) (#2)
+        float rt = r;
+        float gt = g;
+        float bt = b;
+
+        if (!state.is_in_gamut) {
+            rt = state.to_gamut[0][0] * r + state.to_gamut[0][1] * g + state.to_gamut[0][2] * b;
+            gt = state.to_gamut[1][0] * r + state.to_gamut[1][1] * g + state.to_gamut[1][2] * b;
+            bt = state.to_gamut[2][0] * r + state.to_gamut[2][1] * g + state.to_gamut[2][2] * b;
+        }
+
+        // 3. Measure excursion relative to y_anchor in target space (e >= 1.0 means outside target gamut)
+        const float max_t = std::max({rt, gt, bt});
+        const float min_t = std::min({rt, gt, bt});
+
+        const float e_max = (max_t > y_anchor) ? (max_t - y_anchor) / std::max(maxValue - y_anchor, 1e-3f) : 0.f;
+        const float e_min = (min_t < y_anchor) ? (y_anchor - min_t) / std::max(y_anchor, 1e-3f) : 0.f;
+        const float e = std::max(e_max, e_min);
+
+        // 4. Smooth tanh soft-knee compression applied back in working space
+        constexpr float knee = 0.85f; // Start compressing at 85% of target gamut boundary
+        if (e > knee) {
+            const float e_compressed = compress(e, knee, 1.f);
+            const float k_gamut = e_compressed / e;
+
+            r = y_anchor + k_gamut * (r - y_anchor);
+            g = y_anchor + k_gamut * (g - y_anchor);
+            b = y_anchor + k_gamut * (b - y_anchor);
+        }
+
+        setUnlessOOG(rc[i], gc[i], bc[i], r, g, b);
     }
 }
 float PerceptualToneCurve::cf_range[2];
@@ -3462,11 +3552,27 @@ void PerceptualToneCurve::init()
 
 void PerceptualToneCurve::initApplyState(PerceptualToneCurveState & state, const Glib::ustring &workingSpace) const
 {
-    const TMatrix wprof = ICCStore::getInstance()->workingSpaceMatrix(workingSpace);
+    const TMatrix working = ICCStore::getInstance()->workingSpaceMatrix(workingSpace);
 
-    state.yr = static_cast<float>(wprof[1][0]);
-    state.yg = static_cast<float>(wprof[1][1]);
-    state.yb = static_cast<float>(wprof[1][2]);
+    for (int i = 0; i < 3; i++) {
+        state.y[i] = static_cast<float>(working[1][i]);
+    }
+
+    if (workingSpace == "sRGB") {
+        state.is_in_gamut = true;
+        return;
+    }
+
+    state.is_in_gamut = false;
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            double sum = 0.0;
+            for (int k = 0; k < 3; ++k) {
+                sum += sRGB_xyz[r][k] * working[k][c];
+            }
+            state.to_gamut[r][c] = static_cast<float>(sum);
+        }
+    }
 }
 
 }

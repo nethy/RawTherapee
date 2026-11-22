@@ -1813,9 +1813,9 @@ public:
 class PerceptualToneCurveState
 {
 public:
-    float yr;
-    float yg;
-    float yb;
+    float y[3];
+    float to_gamut[3][3];
+    bool is_in_gamut;
 };
 
 // Tone curve whose purpose is to keep the color appearance constant, that is the curve changes contrast
